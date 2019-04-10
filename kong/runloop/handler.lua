@@ -73,6 +73,7 @@ local plugins_semaphore
 local _set_rebuild_plugins
 
 
+local loaded_plugins
 local declarative_entities
 
 
@@ -533,6 +534,30 @@ local function init_worker()
 end
 
 
+local function sort_plugins(plugins)
+  -- sort plugins by order of execution
+  sort(plugins, function(a, b)
+    local priority_a = a.handler.PRIORITY or 0
+    local priority_b = b.handler.PRIORITY or 0
+    return priority_a > priority_b
+  end)
+
+  -- add reports plugin if not disabled
+  if kong.configuration.anonymous_reports then
+    local reports = require "kong.reports"
+
+    reports.configure_ping(kong.configuration)
+    reports.add_ping_value("database_version", kong.db.infos.db_ver)
+    reports.toggle(true)
+
+    plugins[#plugins +1] = {
+      name = "reports",
+      handler = reports,
+    }
+  end
+end
+
+
 do
   local router_version
   local plugins_version
@@ -795,9 +820,10 @@ do
     end
 
     local new_plugins = {
-      map = {},
-      cache = {},
-      combos = {}
+      map    = {},
+      cache  = {},
+      loaded = loaded_plugins,
+      combos = {},
     }
 
     local counter = 0
@@ -1026,11 +1052,14 @@ return {
   end,
 
   -- exported for unit-testing purposes only
-  _set_rebuild_router = _set_rebuild_router,
+  _set_rebuild_router  = _set_rebuild_router,
   _set_rebuild_plugins = _set_rebuild_plugins,
 
   init = {
     after = function()
+      loaded_plugins = assert(kong.db.plugins:load_plugin_schemas(kong.configuration.loaded_plugins))
+      sort_plugins(loaded_plugins)
+
       if kong.configuration.database == "off" then
         local err
         declarative_entities, err = parse_declarative_config()
